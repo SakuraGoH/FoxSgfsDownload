@@ -67,16 +67,19 @@ C++ 发布版搜索没有人为 sleep，同条件下核心搜索中位数约 **3
 
 ## 复现方式
 
+C++ 侧可独立复现：
+
 ```bat
-:: C++ 核心 benchmark
 cpp\build\Release\FoxKifuBench.exe --runs 3 --delay 0
 cpp\build\Release\FoxKifuBench.exe --runs 2 --delay 80
+```
 
-:: Python 等价流程
+Python 侧脚本 `bench_python.py` / `bench_python_service.py` 依赖原 Python 版
+`fox` 包，本仓库不包含 Python 实现；原始数据已随仓库附带。Python 对照命令：
+
+```bat
 python benchmark\bench_python.py --runs 3 --delay 0
 python benchmark\bench_python.py --runs 2 --delay 80
-
-:: Python 真实 SearchService
 python benchmark\bench_python_service.py
 ```
 
