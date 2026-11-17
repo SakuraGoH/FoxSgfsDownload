@@ -1,0 +1,40 @@
+# Build output
+build/
+release/
+out/
+.vs/
+CMakeUserPresets.json
+
+# Visual Studio / MSVC
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.idb
+
+# Binaries / archives
+*.exe
+*.dll
+*.zip
+*.7z
+
+# Runtime data
+downloads/
+*.sgf
+foxkifu_cpp.json
+foxkifu_cpp.ini
+
+# Python cache (benchmark scripts)
+__pycache__/
+*.pyc
+
+# OS/editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
