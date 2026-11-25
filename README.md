@@ -2,6 +2,18 @@
 
 野狐围棋棋谱库的**全量历史检索 / 批量下载**工具，C++20 重写版。
 
+<p align="center">
+  <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C?style=flat-square&logo=cplusplus&logoColor=white">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11-0078D6?style=flat-square&logo=windows&logoColor=white">
+  <img alt="Dear ImGui" src="https://img.shields.io/badge/Dear%20ImGui-1.91.9b-FF6B6B?style=flat-square">
+  <img alt="FoxWQ" src="https://img.shields.io/badge/FoxWQ-%E9%87%8E%E7%8B%90-8B5CF6?style=flat-square">
+  <img alt="SGF" src="https://img.shields.io/badge/SGF-Downloader-2EA44F?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square">
+  <img alt="Benchmark" src="https://img.shields.io/badge/Benchmark-2.11%C3%97-6F42C1?style=flat-square">
+</p>
+
+> 关键词：野狐围棋 · FoxWQ · 棋谱下载 · SGF · 全量历史 · C++20 · Dear ImGui · 树搜索 · 批量导出
+
 > ## ⚠️ 严格绝对禁止商用
 > 本项目采用**自定义非商业协议**：任何形式的商业使用（售卖、付费分发、SaaS、广告变现、商业培训、商业数据/AI 训练、企业内部商业使用等）**一律禁止**。  
 > 仅限个人学习、复盘、研究使用。完整条款见 [LICENSE](LICENSE)。
