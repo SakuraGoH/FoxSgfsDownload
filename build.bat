@@ -15,10 +15,10 @@ cmake --build build --config Release
 if errorlevel 1 goto fail
 
 if not exist release mkdir release
-copy /Y "build\Release\FoxKifuStudio.exe" "release\FoxKifuStudio.exe" >nul
+copy /Y "build\Release\FoxSgfsDownload-Max.exe" "release\FoxSgfsDownload-Max.exe" >nul
 copy /Y "root.txt" "release\root.txt" >nul
 echo.
-echo Build OK: %~dp0release\FoxKifuStudio.exe
+echo Build OK: %~dp0release\FoxSgfsDownload-Max.exe
 goto end
 
 :fail
@@ -28,3 +28,4 @@ exit /b 1
 
 :end
 endlocal
+

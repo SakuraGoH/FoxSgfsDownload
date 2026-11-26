@@ -162,7 +162,7 @@ struct Settings {
 };
 
 static std::string settingsPath() {
-    return util::joinPath(util::exeDirectory(), "foxkifu_cpp.json");
+    return util::joinPath(util::exeDirectory(), "foxsgfsdownload_max.json");
 }
 
 static std::string defaultOutputDir() {
@@ -1025,7 +1025,6 @@ void App::startSearch() {
             return;
         }
 
-        std::vector<Game> searchItems;
         std::vector<std::string> aliases;
         if (!user.name.empty()) aliases.push_back(user.name);
         aliases.push_back(query);
@@ -1040,49 +1039,107 @@ void App::startSearch() {
             aliases.swap(tmp);
         }
 
-        auto streamSearch = [&](const std::string& kw) {
-            int page = 1;
-            int pages = 0;
-            while (!shared->searchStop.load() && pages < 500) {
-                auto data = fox.fetchQipuSearch(kw, page, err);
+        // 棋谱库详情与列表并行：详情按 type=1/6 两条游标链并发，
+        // 列表页之间没有游标依赖，用少量 worker 并发翻页。
+        std::vector<Game> meta;
+        std::mutex metaMutex;
+        auto metaWorker = [&](int type) {
+            FoxClient client;
+            std::string last = "0";
+            for (int page = 1; page <= 500 && !shared->searchStop.load(); ++page) {
+                std::string e;
+                auto data = client.fetchQipuMeta(uid, type, last, e);
                 if (data.games.empty()) break;
-                std::vector<Game> batch;
-                for (Game& g : data.games) {
-                    if (g.chessid.empty() || seen.count(g.chessid)) continue;
-                    seen.insert(g.chessid);
-                    batch.push_back(g);
+                std::string nextLast = data.games.back().chessid;
+                size_t metaSize = 0;
+                {
+                    std::lock_guard<std::mutex> lock(metaMutex);
+                    meta.insert(meta.end(), data.games.begin(), data.games.end());
+                    metaSize = meta.size();
                 }
-                if (!batch.empty()) {
-                    searchItems.insert(searchItems.end(), batch.begin(), batch.end());
-                    Event ev;
-                    ev.type = EvType::AddGames;
-                    ev.games = batch;
-                    pushEvent(shared, ev);
+                last = nextLast;
+                if (page % 10 == 0) {
+                    pushEvent(shared, Event{EvType::Status,
+                                            "棋谱库详情 · 已补全 " +
+                                                std::to_string(metaSize) + " 局"});
                 }
-                ++pages;
-                pushEvent(shared, Event{EvType::Status,
-                                        "棋谱库列表 第 " + std::to_string(page) +
-                                            " 页 · 已获取 " +
-                                            std::to_string(searchItems.size() + latest.size()) +
-                                            " 局"});
-                ++page;
-                if (data.ended) break;
             }
-            return !searchItems.empty();
+        };
+        std::thread metaA(metaWorker, 1);
+        std::thread metaB(metaWorker, 6);
+
+        auto runSearchPages = [&](const std::string& kw) {
+            constexpr int kWorkers = 4;
+            std::atomic<int> nextPage{1};
+            std::atomic<bool> ended{false};
+            std::atomic<int> donePages{0};
+            std::mutex mutex;
+            std::unordered_set<std::string> seenLocal = seen;
+            std::vector<Game> out;
+
+            auto worker = [&]() {
+                FoxClient client;
+                while (!shared->searchStop.load() && !ended.load()) {
+                    int page = nextPage.fetch_add(1);
+                    if (page > 500) break;
+                    std::string e;
+                    auto data = client.fetchQipuSearch(kw, page, e);
+                    if (data.games.empty()) {
+                        ended.store(true);
+                        break;
+                    }
+                    std::vector<Game> batch;
+                    size_t total = 0;
+                    {
+                        std::lock_guard<std::mutex> lock(mutex);
+                        for (const Game& g : data.games) {
+                            if (g.chessid.empty() ||
+                                !seenLocal.insert(g.chessid).second) {
+                                continue;
+                            }
+                            batch.push_back(g);
+                        }
+                        out.insert(out.end(), batch.begin(), batch.end());
+                        total = out.size();
+                    }
+                    if (!batch.empty()) {
+                        Event ev;
+                        ev.type = EvType::AddGames;
+                        ev.games = batch;
+                        pushEvent(shared, ev);
+                    }
+                    int pages = ++donePages;
+                    if (pages % 4 == 0) {
+                        pushEvent(shared, Event{
+                            EvType::Status,
+                            "棋谱库列表 · 已完成 " + std::to_string(pages) +
+                                " 页 · 已获取 " +
+                                std::to_string(total + latest.size()) + " 局"});
+                    }
+                    if (data.ended) ended.store(true);
+                }
+            };
+
+            std::vector<std::thread> workers;
+            for (int i = 0; i < kWorkers; ++i) workers.emplace_back(worker);
+            for (auto& t : workers) t.join();
+            return out;
         };
 
-        bool got = streamSearch(keyword);
-        if (!got) {
-            for (const std::string& alias : aliases) {
-                if (alias == keyword) continue;
-                if (shared->searchStop.load()) break;
-                if (streamSearch(alias)) {
-                    keyword = alias;
-                    got = true;
-                    break;
-                }
+        std::vector<Game> searchItems;
+        bool got = false;
+        for (const std::string& alias : aliases) {
+            if (shared->searchStop.load()) break;
+            auto out = runSearchPages(alias);
+            if (!out.empty()) {
+                searchItems = std::move(out);
+                keyword = alias;
+                got = true;
+                break;
             }
         }
+        metaA.join();
+        metaB.join();
         if (!got) {
             pushEvent(shared, Event{EvType::SearchDone,
                                     "查询完成：共 " +
@@ -1092,32 +1149,12 @@ void App::startSearch() {
             return;
         }
 
-        if (!shared->searchStop.load()) {
-            std::vector<Game> meta;
-            for (int type : {1, 6}) {
-                std::string last = "0";
-                for (int page = 1; page <= 500 && !shared->searchStop.load(); ++page) {
-                    auto data = fox.fetchQipuMeta(uid, type, last, err);
-                    if (data.games.empty()) break;
-                    meta.insert(meta.end(), data.games.begin(), data.games.end());
-                    last = data.games.back().chessid;
-                    if (page % 5 == 0) {
-                        pushEvent(shared, Event{EvType::Status,
-                                                "棋谱库详情 第 " +
-                                                    std::to_string(page) +
-                                                    " 页 · 已补全 " +
-                                                    std::to_string(meta.size()) + " 局"});
-                    }
-                    if (data.ended) break;
-                }
-            }
-            if (!meta.empty()) {
-                auto merged = FoxClient::mergeHistory(searchItems, meta);
-                Event ev;
-                ev.type = EvType::MetaReady;
-                ev.games = std::move(merged);
-                pushEvent(shared, ev);
-            }
+        if (!shared->searchStop.load() && !meta.empty()) {
+            auto merged = FoxClient::mergeHistory(searchItems, meta);
+            Event ev;
+            ev.type = EvType::MetaReady;
+            ev.games = std::move(merged);
+            pushEvent(shared, ev);
         }
 
         int total = static_cast<int>(latest.size() + searchItems.size());
@@ -1400,7 +1437,7 @@ void App::drawHeader() {
     ImGui::SameLine();
     ImGui::BeginGroup();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
-    textBold("Fox Kifu Studio", 26.0f, kText);
+    textBold("FoxSgfsDownload-Max", 26.0f, kText);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
     textSmall("野狐棋谱库 · 全量历史检索与批量下载", kMuted);
     ImGui::EndGroup();
@@ -1990,7 +2027,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     RECT rc{0, 0, ww, wh};
     AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
     HWND hwnd = CreateWindowExW(
-        0, wc.lpszClassName, L"Fox Kifu Studio · 野狐棋谱库",
+        0, wc.lpszClassName, L"FoxSgfsDownload-Max · 野狐棋谱库",
         WS_OVERLAPPEDWINDOW, (sw - (rc.right - rc.left)) / 2,
         (sh - (rc.bottom - rc.top)) / 2, rc.right - rc.left, rc.bottom - rc.top,
         nullptr, nullptr, hInstance, nullptr);
@@ -2114,3 +2151,4 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     CoUninitialize();
     return 0;
 }
+

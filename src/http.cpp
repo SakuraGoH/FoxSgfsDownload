@@ -53,11 +53,11 @@ static Result request(const std::wstring& method, const std::string& url,
     if (path.empty()) path = L"/";
 
     HINTERNET session = WinHttpOpen(
-        L"FoxKifuStudio/1.0",
+        L"FoxSgfsDownload-Max/1.0",
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
-        session = WinHttpOpen(L"FoxKifuStudio/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        session = WinHttpOpen(L"FoxSgfsDownload-Max/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     }
     if (!session) {
@@ -160,3 +160,4 @@ Result postForm(const std::string& url, const std::string& formBody,
 }
 
 } // namespace http
+

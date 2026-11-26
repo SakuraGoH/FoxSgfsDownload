@@ -1,0 +1,3 @@
+{"run":1,"mode":"parallel","workers":4,"resolve_ms":449,"h5_ms":389,"h5_count":101,"search_ms":11998,"search_pages":41,"search_count":717,"meta_ms":11998,"meta_pages":39,"meta_count":1153,"merge_ms":6,"total_ms":12845,"total_count":818,"merged_count":717}
+{"run":2,"mode":"parallel","workers":4,"resolve_ms":430,"h5_ms":359,"h5_count":101,"search_ms":11804,"search_pages":41,"search_count":717,"meta_ms":11804,"meta_pages":39,"meta_count":1153,"merge_ms":6,"total_ms":12601,"total_count":818,"merged_count":717}
+{"run":3,"mode":"parallel","workers":4,"resolve_ms":369,"h5_ms":392,"h5_count":101,"search_ms":11957,"search_pages":41,"search_count":717,"meta_ms":11957,"meta_pages":39,"meta_count":1153,"merge_ms":5,"total_ms":12725,"total_count":818,"merged_count":717}

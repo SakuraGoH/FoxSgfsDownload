@@ -1,6 +1,6 @@
-# FoxSgfsDownload · Fox Kifu Studio
+# FoxSgfsDownload-Max
 
-野狐围棋棋谱库的**全量历史检索 / 批量下载**工具，C++20 重写版。
+野狐围棋棋谱库的**全量历史检索 / 批量下载**工具，C++20 性能增强版。
 
 <p align="center">
   <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C?style=flat-square&logo=cplusplus&logoColor=white">
@@ -9,7 +9,7 @@
   <img alt="FoxWQ" src="https://img.shields.io/badge/FoxWQ-%E9%87%8E%E7%8B%90-8B5CF6?style=flat-square">
   <img alt="SGF" src="https://img.shields.io/badge/SGF-Downloader-2EA44F?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square">
-  <img alt="Benchmark" src="https://img.shields.io/badge/Benchmark-2.11%C3%97-6F42C1?style=flat-square">
+  <img alt="Benchmark" src="https://img.shields.io/badge/Benchmark-7.47%C3%97-6F42C1?style=flat-square">
 </p>
 
 > 关键词：野狐围棋 · FoxWQ · 棋谱下载 · SGF · 全量历史 · C++20 · Dear ImGui · 树搜索 · 批量导出
@@ -37,15 +37,16 @@
 
 ## Benchmark
 
-同一目标（柯洁 UID `6757425`，818 局）、同一网络、同一时间段，Python 版与 C++ 版对比：
+同一目标（柯洁 UID `6757425`，818 局）、同一网络、同一时间段：
 
-| 条件 | Python | C++ | C++ 加速 |
-|---|---:|---:|---:|
-| 无额外延迟（0 ms/页） | 81.6 s | **32.6 s** | **2.50×** |
-| 相同节流（80 ms/页） | 87.7 s | **41.6 s** | **2.11×** |
-| 纯合并/解析 | 0.199 s | **0.013 s** | **15.3×** |
+| 条件 | Python 版 | C++ 旧版（顺序） | **FoxSgfsDownload-Max** | Max vs Python | Max vs 旧 C++ |
+|---|---:|---:|---:|---:|---:|
+| 无额外延迟（0 ms/页） | 81.6 s | 31.5 s | **10.9 s** | **7.47×** | **2.88×** |
+| 相同节流（80 ms/页） | 87.7 s | 41.0 s | **12.7 s** | **6.90×** | **3.22×** |
 
-完整方法、分阶段数据和原始 JSON/CSV 见 [benchmark/BENCHMARK.md](benchmark/BENCHMARK.md)。
+Max 使用 **4 个列表页 worker + 2 条详情游标链**并发，列表和详情同时开始。
+
+完整方法、分阶段数据和原始 JSONL/CSV 见 [benchmark/BENCHMARK.md](benchmark/BENCHMARK.md)。
 
 ![Benchmark](benchmark/benchmark.png)
 
@@ -77,11 +78,11 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-生成：`build\Release\FoxKifuStudio.exe`；`build.bat` 会同时复制到 `release\`。
+生成：`build\Release\FoxSgfsDownload-Max.exe`；`build.bat` 会同时复制到 `release\`。
 
 ## 使用
 
-双击 `release\FoxKifuStudio.exe`，或运行 `run.bat`。
+双击 `release\FoxSgfsDownload-Max.exe`，或运行 `run.bat`。
 
 1. 选择“昵称”或“UID”。
 2. 输入查询对象，勾选“抓取全部历史”。
@@ -115,17 +116,17 @@ cmake --build build --config Release
 ![对手筛选](preview-opponent.png)
 
 ```bat
-FoxKifuStudio.exe --query 柯洁 --opponent 申真谞
+FoxSgfsDownload-Max.exe --query 柯洁 --opponent 申真谞
 ```
 
 ### 命令行参数
 
 ```bat
-FoxKifuStudio.exe --query 柯洁
-FoxKifuStudio.exe --query 6757425 --uid
-FoxKifuStudio.exe --query 柯洁 --opponent 申真谞
-FoxKifuStudio.exe --query 6757425 --uid --download
-FoxKifuStudio.exe --tree
+FoxSgfsDownload-Max.exe --query 柯洁
+FoxSgfsDownload-Max.exe --query 6757425 --uid
+FoxSgfsDownload-Max.exe --query 柯洁 --opponent 申真谞
+FoxSgfsDownload-Max.exe --query 6757425 --uid --download
+FoxSgfsDownload-Max.exe --tree
 ```
 
 - `--query`：昵称或 UID
@@ -141,7 +142,7 @@ FoxKifuStudio.exe --tree
 ├─ assets/
 │  ├─ app.rc
 │  └─ magic_circle.ico
-├─ benchmark/                 # Python vs C++ benchmark
+├─ benchmark/                 # 搜索速度 benchmark
 ├─ src/
 │  ├─ main.cpp                # Win32 + D3D11 + Dear ImGui 界面、搜索/下载调度
 │  ├─ fox.cpp / fox.h         # FoxWQ 接口、HTML/JSON/棋谱库解析、SGF
@@ -199,3 +200,4 @@ FoxKifuStudio.exe --tree
 ## 说明
 
 exe 未购买代码签名证书，首次运行可能出现 SmartScreen 提示，点“更多信息 → 仍要运行”即可；也可以右键 exe → 属性 → 解除锁定。
+

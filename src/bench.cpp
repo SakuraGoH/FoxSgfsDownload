@@ -2,11 +2,15 @@
 #include "util.h"
 
 #include <chrono>
+#include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <vector>
 
 using Clock = std::chrono::steady_clock;
 
@@ -21,12 +25,16 @@ int main(int argc, char** argv) {
     std::string uid = "6757425";
     int delayMs = 0;
     int runs = 3;
+    bool parallel = false;
+    int workers = 4;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--query" && i + 1 < argc) query = argv[++i];
         else if (arg == "--uid" && i + 1 < argc) uid = argv[++i];
         else if (arg == "--delay" && i + 1 < argc) delayMs = std::atoi(argv[++i]);
         else if (arg == "--runs" && i + 1 < argc) runs = std::atoi(argv[++i]);
+        else if (arg == "--parallel") parallel = true;
+        else if (arg == "--workers" && i + 1 < argc) workers = std::max(1, std::atoi(argv[++i]));
     }
 
     for (int run = 1; run <= runs; ++run) {
@@ -49,43 +57,113 @@ int main(int argc, char** argv) {
         auto latest = fox.fetchLatest(targetUid, err);
         long long h5Ms = msSince(h5Start);
 
-        auto searchStart = Clock::now();
-        std::vector<Game> searchItems;
-        std::unordered_set<std::string> seen;
-        for (const Game& g : latest) seen.insert(g.chessid);
+        long long searchMs = 0;
+        long long metaMs = 0;
         int searchPages = 0;
-        for (int page = 1; page <= 500; ++page) {
-            auto data = fox.fetchQipuSearch(user->name, page, err);
-            if (data.games.empty()) break;
-            ++searchPages;
-            for (Game& g : data.games) {
-                if (g.chessid.empty() || seen.count(g.chessid)) continue;
-                seen.insert(g.chessid);
-                searchItems.push_back(std::move(g));
-            }
-            if (delayMs > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-            }
-        }
-        long long searchMs = msSince(searchStart);
-
-        auto metaStart = Clock::now();
-        std::vector<Game> meta;
         int metaPages = 0;
-        for (int type : {1, 6}) {
-            std::string last = "0";
+        std::vector<Game> searchItems;
+        std::vector<Game> meta;
+        if (parallel) {
+            auto searchStart = Clock::now();
+            auto metaStart = Clock::now();
+            std::atomic<int> nextPage{1};
+            std::atomic<int> doneSearchPages{0};
+            std::atomic<int> doneMetaPages{0};
+            std::atomic<bool> ended{false};
+            std::mutex searchMutex;
+            std::mutex metaMutex;
+            std::unordered_set<std::string> seen;
+            for (const Game& g : latest) seen.insert(g.chessid);
+
+            auto searchWorker = [&]() {
+                FoxClient client;
+                while (!ended.load()) {
+                    int page = nextPage.fetch_add(1);
+                    if (page > 500) break;
+                    std::string e;
+                    auto data = client.fetchQipuSearch(user->name, page, e);
+                    if (data.games.empty()) {
+                        ended.store(true);
+                        break;
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(searchMutex);
+                        for (Game& g : data.games) {
+                            if (g.chessid.empty() || seen.count(g.chessid)) continue;
+                            seen.insert(g.chessid);
+                            searchItems.push_back(std::move(g));
+                        }
+                    }
+                    ++doneSearchPages;
+                    if (delayMs > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                    }
+                }
+            };
+
+            auto metaWorker = [&](int type) {
+                FoxClient client;
+                std::string last = "0";
+                for (int page = 1; page <= 500; ++page) {
+                    std::string e;
+                    auto data = client.fetchQipuMeta(targetUid, type, last, e);
+                    if (data.games.empty()) break;
+                    {
+                        std::lock_guard<std::mutex> lock(metaMutex);
+                        meta.insert(meta.end(), data.games.begin(), data.games.end());
+                    }
+                    last = data.games.back().chessid;
+                    ++doneMetaPages;
+                    if (delayMs > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                    }
+                }
+            };
+
+            std::vector<std::thread> threads;
+            threads.emplace_back(metaWorker, 1);
+            threads.emplace_back(metaWorker, 6);
+            for (int i = 0; i < workers; ++i) threads.emplace_back(searchWorker);
+            for (auto& t : threads) t.join();
+            searchPages = doneSearchPages.load();
+            metaPages = doneMetaPages.load();
+            searchMs = msSince(searchStart);
+            metaMs = msSince(metaStart);
+        } else {
+            auto searchStart = Clock::now();
+            std::unordered_set<std::string> seen;
+            for (const Game& g : latest) seen.insert(g.chessid);
             for (int page = 1; page <= 500; ++page) {
-                auto data = fox.fetchQipuMeta(targetUid, type, last, err);
+                auto data = fox.fetchQipuSearch(user->name, page, err);
                 if (data.games.empty()) break;
-                ++metaPages;
-                meta.insert(meta.end(), data.games.begin(), data.games.end());
-                last = data.games.back().chessid;
+                ++searchPages;
+                for (Game& g : data.games) {
+                    if (g.chessid.empty() || seen.count(g.chessid)) continue;
+                    seen.insert(g.chessid);
+                    searchItems.push_back(std::move(g));
+                }
                 if (delayMs > 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
                 }
             }
+            searchMs = msSince(searchStart);
+
+            auto metaStart = Clock::now();
+            for (int type : {1, 6}) {
+                std::string last = "0";
+                for (int page = 1; page <= 500; ++page) {
+                    auto data = fox.fetchQipuMeta(targetUid, type, last, err);
+                    if (data.games.empty()) break;
+                    ++metaPages;
+                    meta.insert(meta.end(), data.games.begin(), data.games.end());
+                    last = data.games.back().chessid;
+                    if (delayMs > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                    }
+                }
+            }
+            metaMs = msSince(metaStart);
         }
-        long long metaMs = msSince(metaStart);
 
         auto mergeStart = Clock::now();
         auto merged = FoxClient::mergeHistory(searchItems, meta);
@@ -94,6 +172,8 @@ int main(int argc, char** argv) {
 
         std::cout << "{"
                   << "\"run\":" << run
+                  << ",\"mode\":\"" << (parallel ? "parallel" : "sequential") << "\""
+                  << ",\"workers\":" << (parallel ? workers : 1)
                   << ",\"resolve_ms\":" << resolveMs
                   << ",\"h5_ms\":" << h5Ms
                   << ",\"h5_count\":" << latest.size()
