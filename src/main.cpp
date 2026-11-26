@@ -111,6 +111,7 @@ static void CleanupDeviceD3D() {
 enum class EvType {
     Status,
     UserInfo,
+    OpponentInfo,
     AddGames,
     MetaReady,
     SearchDone,
@@ -152,6 +153,7 @@ static void pushEvent(const std::shared_ptr<Shared>& shared, Event e) {
 struct Settings {
     int mode = 0;
     std::string query;
+    std::string opponent;
     bool fullHistory = true;
     int pageSize = 25;
     int concurrency = 3;
@@ -175,6 +177,7 @@ static void loadSettings(Settings& s) {
     if (j.is_discarded() || !j.is_object()) return;
     s.mode = j.value("mode", s.mode);
     s.query = j.value("query", s.query);
+    s.opponent = j.value("opponent", s.opponent);
     s.fullHistory = j.value("fullHistory", s.fullHistory);
     s.pageSize = j.value("pageSize", s.pageSize);
     s.concurrency = j.value("concurrency", s.concurrency);
@@ -186,6 +189,7 @@ static void saveSettings(const Settings& s) {
     json j;
     j["mode"] = s.mode;
     j["query"] = s.query;
+    j["opponent"] = s.opponent;
     j["fullHistory"] = s.fullHistory;
     j["pageSize"] = s.pageSize;
     j["concurrency"] = s.concurrency;
@@ -512,6 +516,7 @@ public:
         dbg("ctor output");
         dbg(("ctor output: " + outputDir_).c_str());
         std::snprintf(query_, sizeof(query_), "%s", settings_.query.c_str());
+        std::snprintf(opponent_, sizeof(opponent_), "%s", settings_.opponent.c_str());
         dbg("ctor query");
         std::error_code ec;
         std::filesystem::create_directories(
@@ -525,8 +530,10 @@ public:
 
     void frame();
     void saveNow() { saveSettings(settings_); }
-    void setAutoQuery(const std::string& query, bool uid, bool download = false) {
+    void setAutoQuery(const std::string& query, bool uid, bool download = false,
+                      const std::string& opponent = "") {
         std::snprintf(query_, sizeof(query_), "%s", query.c_str());
+        std::snprintf(opponent_, sizeof(opponent_), "%s", opponent.c_str());
         mode_ = uid ? 1 : 0;
         autoSearchPending_ = true;
         autoDownload_ = download;
@@ -548,6 +555,10 @@ private:
 
     std::string currentUser_;
     std::string currentUid_;
+    std::string opponentUid_;
+    std::string opponentName_;
+    std::string opponentEnglish_;
+    size_t matchCount_ = 0;
     std::string status_;
     std::string toast_;
     double toastUntil_ = 0.0;
@@ -560,6 +571,7 @@ private:
 
     int mode_ = 0;
     char query_[256] = {};
+    char opponent_[256] = {};
     char keyword_[256] = {};
     char jump_[16] = {};
     int sortMode_ = 0;
@@ -569,6 +581,8 @@ private:
     int treeDepth_ = 1;
     int lastDrawnPage_ = -1;
     int lastDrawnEpoch_ = -1;
+    size_t lastFilteredSize_ = 0;
+    bool resetScroll_ = true;
     bool fullHistory_ = true;
 
     int historyCount_ = 0;
@@ -586,6 +600,9 @@ private:
     void startTreeSearch();
     void startDownload(std::vector<Game> list);
     void downloadOne(const Game& game);
+    bool opponentFilterActive() const;
+    bool gameMatchesOpponent(const Game& g) const;
+    void fillKnownNames(Game& g) const;
     void rebuildFiltered(bool keepPage);
     void resetForSearch();
     void applyMeta(const std::vector<Game>& meta);
@@ -613,15 +630,71 @@ int App::pageCount() const {
     return static_cast<int>((filtered_.size() + pageSize_ - 1) / pageSize_);
 }
 
+bool App::opponentFilterActive() const {
+    return !opponentUid_.empty() || !opponentName_.empty();
+}
+
+void App::fillKnownNames(Game& g) const {
+    const std::string oppDisplay =
+        opponentEnglish_.empty() ? opponentName_ : opponentEnglish_;
+    auto fill = [&](std::string& name, const std::string& uid) {
+        if (!name.empty() && name != "???") return;
+        if (!currentUid_.empty() && uid == currentUid_ &&
+            !currentUser_.empty() && currentUser_ != currentUid_) {
+            name = currentUser_;
+        } else if (!opponentUid_.empty() && uid == opponentUid_ &&
+                   !oppDisplay.empty()) {
+            name = oppDisplay;
+        }
+    };
+    fill(g.blackName, g.blackUid);
+    fill(g.whiteName, g.whiteUid);
+}
+
+bool App::gameMatchesOpponent(const Game& g) const {
+    if (!opponentFilterActive()) return true;
+    if (!opponentUid_.empty() &&
+        (g.blackUid == opponentUid_ || g.whiteUid == opponentUid_)) {
+        return true;
+    }
+    auto nameEquals = [&](const std::string& name) {
+        if (name.empty()) return false;
+        if (!opponentName_.empty() && name == opponentName_) return true;
+        if (!opponentEnglish_.empty() &&
+            util::lowerAscii(name) == util::lowerAscii(opponentEnglish_)) {
+            return true;
+        }
+        return false;
+    };
+    if (nameEquals(g.blackName) || nameEquals(g.whiteName)) return true;
+    if (nameEquals(g.displayBlackName()) || nameEquals(g.displayWhiteName())) {
+        return true;
+    }
+
+    // 棋谱库列表项只有标题，标题里通常包含“A执黑胜B”这样的双方名字。
+    std::string title = util::lowerAscii(g.title);
+    if (!opponentName_.empty() &&
+        title.find(util::lowerAscii(opponentName_)) != std::string::npos) {
+        return true;
+    }
+    if (!opponentEnglish_.empty() &&
+        title.find(util::lowerAscii(opponentEnglish_)) != std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
 void App::rebuildFiltered(bool keepPage) {
     std::string key = util::lowerAscii(util::trim(keyword_));
     filtered_.clear();
     filtered_.reserve(games_.size());
     for (size_t i = 0; i < games_.size(); ++i) {
         const Game& g = games_[i];
+        if (!gameMatchesOpponent(g)) continue;
         if (!key.empty()) {
             std::string hay = util::lowerAscii(
-                g.blackName + " " + g.whiteName + " " + g.chessid + " " + g.title);
+                g.displayBlackName() + " " + g.displayWhiteName() + " " +
+                g.chessid + " " + g.title);
             if (hay.find(key) == std::string::npos) continue;
         }
         filtered_.push_back(i);
@@ -637,13 +710,18 @@ void App::rebuildFiltered(bool keepPage) {
     int pc = pageCount();
     if (page_ > pc) page_ = pc;
     if (page_ < 1) page_ = 1;
+    if (filtered_.size() < lastFilteredSize_) resetScroll_ = true;
+    lastFilteredSize_ = filtered_.size();
     refreshStats();
 }
 
 void App::refreshStats() {
     historyCount_ = 0;
+    matchCount_ = 0;
     std::string minTime, maxTime;
     for (const Game& g : games_) {
+        if (!gameMatchesOpponent(g)) continue;
+        ++matchCount_;
         if (g.isHistory()) ++historyCount_;
         if (!g.starttime.empty()) {
             if (minTime.empty() || g.starttime < minTime) minTime = g.starttime;
@@ -708,9 +786,16 @@ void App::pollEvents() {
             currentUser_ = e.text;
             currentUid_ = e.uid;
             break;
+        case EvType::OpponentInfo:
+            opponentUid_ = e.uid;
+            opponentName_ = e.text;
+            opponentEnglish_ = e.chessid;
+            changed = true;
+            break;
         case EvType::AddGames: {
             for (Game& g : e.games) {
                 if (g.chessid.empty() || index_.count(g.chessid)) continue;
+                fillKnownNames(g);
                 index_[g.chessid] = games_.size();
                 games_.push_back(std::move(g));
                 changed = true;
@@ -726,9 +811,13 @@ void App::pollEvents() {
         case EvType::SearchDone:
             status_ = e.text;
             toast(e.text);
+            rebuildFiltered(true);
+            if (opponentFilterActive()) {
+                status_ += " · " + util::trim(opponent_) + " 命中 " +
+                           std::to_string(matchCount_) + " 局";
+            }
             if (autoDownload_) {
                 autoDownload_ = false;
-                rebuildFiltered(true);
                 auto jobs = collectFiltered();
                 if (!jobs.empty()) startDownload(jobs);
             }
@@ -777,6 +866,7 @@ void App::applyMeta(const std::vector<Game>& meta) {
         bool downloaded = g.downloaded;
         std::string status = g.status;
         g = m;
+        fillKnownNames(g);
         g.selected = selected;
         g.downloaded = downloaded;
         g.status = status;
@@ -788,8 +878,14 @@ void App::resetForSearch() {
     games_.clear();
     index_.clear();
     filtered_.clear();
+    lastFilteredSize_ = 0;
+    resetScroll_ = true;
     currentUser_.clear();
     currentUid_.clear();
+    opponentUid_.clear();
+    opponentName_.clear();
+    opponentEnglish_.clear();
+    matchCount_ = 0;
     historyCount_ = 0;
     timeRange_ = "—";
     downloadTotal_ = downloadDone_ = downloadFailed_ = downloadSkipped_ = 0;
@@ -809,6 +905,7 @@ void App::startSearch() {
         return;
     }
     settings_.query = query;
+    settings_.opponent = util::trim(opponent_);
     settings_.mode = mode_;
     settings_.fullHistory = fullHistory_;
     saveSettings(settings_);
@@ -822,8 +919,9 @@ void App::startSearch() {
     int mode = mode_;
     bool fullHistory = fullHistory_;
     std::string uidHint = mode == 1 ? query : std::string();
+    std::string opponentText = util::trim(opponent_);
 
-    std::thread([shared, mode, fullHistory, query, uidHint]() {
+    std::thread([shared, mode, fullHistory, query, uidHint, opponentText]() {
         FoxClient fox;
         std::string err;
         UserInfo user;
@@ -847,24 +945,75 @@ void App::startSearch() {
 
         auto latest = fox.fetchLatest(uid, err);
         std::unordered_set<std::string> seen;
+        if (!latest.empty() && user.name.empty()) {
+            for (const Game& g : latest) {
+                if (g.blackUid == uid && !g.blackName.empty()) {
+                    user.name = g.displayBlackName();
+                    break;
+                }
+                if (g.whiteUid == uid && !g.whiteName.empty()) {
+                    user.name = g.displayWhiteName();
+                    break;
+                }
+            }
+            if (!user.name.empty()) {
+                pushEvent(shared, Event{EvType::UserInfo, user.name, uid});
+            }
+        }
+
+        if (!opponentText.empty()) {
+            auto isUid = [](const std::string& s) {
+                return !s.empty() &&
+                       std::all_of(s.begin(), s.end(), [](unsigned char c) {
+                           return std::isdigit(c);
+                       });
+            };
+            std::string oppUid;
+            std::string oppName;
+            std::string oppEnglish;
+            if (isUid(opponentText)) {
+                oppUid = opponentText;
+                // UID 无法直接反查昵称，先从 A 的最新对局里找 B 的名字。
+                for (const Game& g : latest) {
+                    if (g.blackUid == oppUid && !g.blackName.empty()) {
+                        oppName = g.displayBlackName();
+                        oppEnglish = g.blackEnName.empty() ? oppName : g.blackEnName;
+                        break;
+                    }
+                    if (g.whiteUid == oppUid && !g.whiteName.empty()) {
+                        oppName = g.displayWhiteName();
+                        oppEnglish = g.whiteEnName.empty() ? oppName : g.whiteEnName;
+                        break;
+                    }
+                }
+            } else {
+                auto opp = fox.queryUser(opponentText, err);
+                if (!opp) {
+                    pushEvent(shared, Event{EvType::SearchError,
+                                            "对手查询失败：" + err});
+                    shared->searching.store(false);
+                    return;
+                }
+                oppUid = opp->uid;
+                oppName = opp->name;
+                oppEnglish = opp->englishName;
+            }
+            if (oppUid == uid) {
+                pushEvent(shared, Event{EvType::SearchError,
+                                        "对手不能和查询对象是同一个人"});
+                shared->searching.store(false);
+                return;
+            }
+            pushEvent(shared, Event{EvType::OpponentInfo, oppName, oppUid,
+                                    oppEnglish});
+            pushEvent(shared, Event{EvType::Status,
+                                    "对手：" + (oppName.empty() ? oppUid : oppName) +
+                                        " · 正在拉取最新对局…"});
+        }
+
         if (!latest.empty()) {
             pushEvent(shared, Event{EvType::AddGames, "", "", "", latest});
             for (const Game& g : latest) seen.insert(g.chessid);
-            if (user.name.empty()) {
-                for (const Game& g : latest) {
-                    if (g.blackUid == uid && !g.blackName.empty()) {
-                        user.name = g.blackName;
-                        break;
-                    }
-                    if (g.whiteUid == uid && !g.whiteName.empty()) {
-                        user.name = g.whiteName;
-                        break;
-                    }
-                }
-                if (!user.name.empty()) {
-                    pushEvent(shared, Event{EvType::UserInfo, user.name, uid});
-                }
-            }
         }
 
         std::string keyword = user.name;
@@ -1326,6 +1475,18 @@ void App::drawSearchCard() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("例如：柯洁 / 6757425。回车开始查询。");
         }
+        ImGui::SameLine(0, 10);
+        textSmall("对手");
+        ImGui::SameLine(0, 6);
+        ImGui::SetNextItemWidth(190);
+        enter = ImGui::InputTextWithHint(
+                    "##opponent", "可选：昵称 / UID", opponent_,
+                    sizeof(opponent_), ImGuiInputTextFlags_EnterReturnsTrue) ||
+                enter;
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("例如：申真谞 / 137345。\n"
+                              "只保留 A 与 B 互为黑白双方的对局，留空则不限对手。");
+        }
         ImGui::SameLine(0, 12);
         ImGui::Checkbox("抓取全部历史", &fullHistory_);
         if (ImGui::IsItemHovered()) {
@@ -1377,7 +1538,11 @@ void App::drawStats() {
     }
     card("##stat_user", "当前用户", user, "野狐账号", kText);
     ImGui::SameLine();
-    card("##stat_total", "总对局", std::to_string(games_.size()), "含最新对局", kGold);
+    bool opp = opponentFilterActive();
+    std::string totalLabel = opp ? "对手匹配" : "总对局";
+    std::string totalSub = opp ? ("vs " + util::trim(opponent_)) : "含最新对局";
+    card("##stat_total", totalLabel.c_str(),
+         std::to_string(opp ? matchCount_ : games_.size()), totalSub, kGold);
     ImGui::SameLine();
     card("##stat_hist", "历史棋谱", std::to_string(historyCount_), "官方棋谱库", kCyan);
     ImGui::SameLine();
@@ -1471,10 +1636,13 @@ void App::drawTable() {
     std::string tableId = "##games_" + std::to_string(searchEpoch_) + "_" +
                           std::to_string(page_);
     if (ImGui::BeginTable(tableId.c_str(), 12, flags, ImVec2(0, tableH))) {
-        if (page_ != lastDrawnPage_ || searchEpoch_ != lastDrawnEpoch_) {
+        if (page_ != lastDrawnPage_ || searchEpoch_ != lastDrawnEpoch_ ||
+            resetScroll_) {
             ImGui::SetScrollY(0.0f);
+            ImGui::SetScrollX(0.0f);
             lastDrawnPage_ = page_;
             lastDrawnEpoch_ = searchEpoch_;
+            resetScroll_ = false;
         }
         ImGui::TableSetupScrollFreeze(1, 1);
         ImGui::TableSetupColumn("选", ImGuiTableColumnFlags_WidthFixed, 26);
@@ -1527,11 +1695,11 @@ void App::drawTable() {
             }
 
             ImGui::TableSetColumnIndex(4);
-            textBody(g.blackName.empty() ? "未知" : g.blackName);
+            textBody(g.displayBlackName().empty() ? "未知" : g.displayBlackName());
             ImGui::TableSetColumnIndex(5);
             textSmall(Game::rankText(g.blackDan).c_str(), kMuted);
             ImGui::TableSetColumnIndex(6);
-            textBody(g.whiteName.empty() ? "未知" : g.whiteName);
+            textBody(g.displayWhiteName().empty() ? "未知" : g.displayWhiteName());
             ImGui::TableSetColumnIndex(7);
             textSmall(Game::rankText(g.whiteDan).c_str(), kMuted);
 
@@ -1870,6 +2038,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         std::string autoQuery;
+        std::string autoOpponent;
         bool autoUid = false;
         bool autoDownload = false;
         bool autoTree = false;
@@ -1878,6 +2047,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
                 std::wstring arg = argv[i];
                 if (arg == L"--query" && i + 1 < argc) {
                     autoQuery = util::wideToUtf8(argv[++i]);
+                } else if (arg == L"--opponent" && i + 1 < argc) {
+                    autoOpponent = util::wideToUtf8(argv[++i]);
                 } else if (arg == L"--uid") {
                     autoUid = true;
                 } else if (arg == L"--download") {
@@ -1891,7 +2062,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         if (autoTree) {
             app.setAutoTree(autoDownload);
         } else if (!autoQuery.empty()) {
-            app.setAutoQuery(autoQuery, autoUid, autoDownload);
+            app.setAutoQuery(autoQuery, autoUid, autoDownload, autoOpponent);
         }
     }
     dbg("app");

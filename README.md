@@ -23,6 +23,7 @@
 ## 功能
 
 - **昵称 / UID 查询**
+- **对手筛选**：输入 A + 对手 B，只列 A vs B / B vs A 的对局
 - **官方棋谱库全量历史**：H5 最新约 100 局 + 棋谱库列表 + 详情元数据
 - **流式追加**：每 20 局立即进入表格，搜索中也能翻页、筛选、排序
 - **树搜索**：读取 `root.txt`，按深度展开对手，每行一个昵称/UID
@@ -102,16 +103,33 @@ cmake --build build --config Release
 
 查询方式选“树搜索”，深度 1 只查 root.txt 里的人，深度 2 会继续查他们的对手。
 
+### 对手筛选
+
+“昵称”查询框右侧新增“对手”输入框：
+
+- A 填查询对象，B 填对手；
+- 只保留 A 与 B 互为黑白双方的对局，**A 执黑或执白都会列出**；
+- 对手可以填昵称或 UID，留空则回到全部对局；
+- 与关键词、时间排序、分页、批量下载兼容。
+
+![对手筛选](preview-opponent.png)
+
+```bat
+FoxKifuStudio.exe --query 柯洁 --opponent 申真谞
+```
+
 ### 命令行参数
 
 ```bat
 FoxKifuStudio.exe --query 柯洁
 FoxKifuStudio.exe --query 6757425 --uid
+FoxKifuStudio.exe --query 柯洁 --opponent 申真谞
 FoxKifuStudio.exe --query 6757425 --uid --download
 FoxKifuStudio.exe --tree
 ```
 
 - `--query`：昵称或 UID
+- `--opponent`：对手昵称或 UID
 - `--uid`：按 UID 查询
 - `--tree`：从 root.txt 启动树搜索
 - `--download`：查询结束后自动下载全部筛选结果

@@ -13,6 +13,8 @@ struct Game {
     std::string whiteUid;
     std::string blackName;
     std::string whiteName;
+    std::string blackEnName;
+    std::string whiteEnName;
     int blackDan = 0;
     int whiteDan = 0;
     int winner = 0;
@@ -47,6 +49,34 @@ struct Game {
     }
 
     static std::string formatPoint(double v) { return util::formatDouble(v, 2); }
+
+    static bool hasHangul(const std::string& s) {
+        for (size_t i = 0; i + 2 < s.size(); ++i) {
+            unsigned char c = static_cast<unsigned char>(s[i]);
+            if (c >= 0xEA && c <= 0xED &&
+                (static_cast<unsigned char>(s[i + 1]) & 0xC0) == 0x80 &&
+                (static_cast<unsigned char>(s[i + 2]) & 0xC0) == 0x80) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string displayBlackName() const {
+        if (blackName.empty() || blackName == "???") {
+            return blackEnName.empty() ? blackName : blackEnName;
+        }
+        if (hasHangul(blackName) && !blackEnName.empty()) return blackEnName;
+        return blackName;
+    }
+
+    std::string displayWhiteName() const {
+        if (whiteName.empty() || whiteName == "???" ) {
+            return whiteEnName.empty() ? whiteName : whiteEnName;
+        }
+        if (hasHangul(whiteName) && !whiteEnName.empty()) return whiteEnName;
+        return whiteName;
+    }
 
     static std::string rankText(int dan) {
         if (dan >= 100) return "职业" + std::to_string(dan - 99) + "段";

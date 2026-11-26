@@ -76,12 +76,61 @@ bool titleMentionsPlayers(const std::string& title, const Game& meta) {
     std::string t = util::lowerAscii(title);
     if (t.empty()) return false;
     int hits = 0;
-    for (const std::string& name : {meta.blackName, meta.whiteName}) {
+    for (const std::string& name : {meta.blackName, meta.blackEnName}) {
         if (name.size() >= 2 && t.find(util::lowerAscii(name)) != std::string::npos) {
             ++hits;
+            break;
+        }
+    }
+    for (const std::string& name : {meta.whiteName, meta.whiteEnName}) {
+        if (name.size() >= 2 && t.find(util::lowerAscii(name)) != std::string::npos) {
+            ++hits;
+            break;
         }
     }
     return hits >= 2;
+}
+
+int playerHits(const std::string& title, const Game& meta) {
+    std::string t = util::lowerAscii(title);
+    if (t.empty()) return 0;
+    int hits = 0;
+    auto hit = [&](const std::string& a, const std::string& b) {
+        if (a.size() >= 2 && t.find(util::lowerAscii(a)) != std::string::npos) return true;
+        if (b.size() >= 2 && t.find(util::lowerAscii(b)) != std::string::npos) return true;
+        return false;
+    };
+    if (hit(meta.blackName, meta.blackEnName)) ++hits;
+    if (hit(meta.whiteName, meta.whiteEnName)) ++hits;
+    return hits;
+}
+
+void parseTitlePlayers(Game& g) {
+    const std::string& title = g.title;
+    size_t blackPos = title.find("执黑");
+    size_t whitePos = title.find("执白");
+    bool black = blackPos != std::string::npos;
+    size_t pos = black ? blackPos : whitePos;
+    if (pos == std::string::npos) return;
+
+    size_t start = pos;
+    while (start > 0) {
+        char c = title[start - 1];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '>') break;
+        --start;
+    }
+    std::string first = util::trim(title.substr(start, pos - start));
+    size_t winPos = title.find("胜", pos);
+    if (winPos == std::string::npos) return;
+    std::string second = util::trim(title.substr(winPos + 3));
+    if (first.empty() || second.empty()) return;
+    if (black) {
+        g.blackName = first;
+        g.whiteName = second;
+    } else {
+        g.whiteName = first;
+        g.blackName = second;
+    }
 }
 
 std::string extractDigitsAfter(const std::string& text, const std::string& marker) {
@@ -150,9 +199,11 @@ std::vector<Game> FoxClient::fetchLatest(const std::string& uid, std::string& er
         g.blackUid = jstr(row, "blackuid");
         g.whiteUid = jstr(row, "whiteuid");
         g.blackName = jstr(row, "blacknick");
-        if (g.blackName.empty()) g.blackName = jstr(row, "blackenname");
+        g.blackEnName = jstr(row, "blackenname");
+        if (g.blackName.empty()) g.blackName = g.blackEnName;
         g.whiteName = jstr(row, "whitenick");
-        if (g.whiteName.empty()) g.whiteName = jstr(row, "whiteenname");
+        g.whiteEnName = jstr(row, "whiteenname");
+        if (g.whiteName.empty()) g.whiteName = g.whiteEnName;
         g.blackDan = jint(row, "blackdan");
         g.whiteDan = jint(row, "whitedan");
         g.winner = jint(row, "winner");
@@ -162,6 +213,7 @@ std::vector<Game> FoxClient::fetchLatest(const std::string& uid, std::string& er
         g.starttime = jstr(row, "starttime");
         g.endtime = jstr(row, "endtime");
         g.title = jstr(row, "title");
+        parseTitlePlayers(g);
         out.push_back(std::move(g));
     }
     return out;
@@ -213,6 +265,7 @@ QipuPage FoxClient::fetchQipuSearch(const std::string& keyword, int page,
             Game g;
             g.chessid = chessid;
             g.title = util::htmlUnescape(util::stripTags(title));
+            parseTitlePlayers(g);
             g.starttime = date.size() == 16 ? date + ":00" : date;
             g.endtime = g.starttime;
             result.games.push_back(std::move(g));
@@ -253,9 +306,11 @@ QipuPage FoxClient::fetchQipuMeta(const std::string& uid, int type,
         g.blackUid = util::trim(fields[1]);
         g.blackDan = std::atoi(fields[2].c_str());
         g.blackName = util::trim(fields[3]);
+        g.blackEnName = util::trim(fields[4]);
         g.whiteUid = util::trim(fields[6]);
         g.whiteDan = std::atoi(fields[7].c_str());
         g.whiteName = util::trim(fields[8]);
+        g.whiteEnName = util::trim(fields[9]);
         g.winner = std::atoi(fields[11].c_str());
         g.point = std::atoi(fields[12].c_str());
         g.moves = std::atoi(fields[14].c_str());
@@ -331,11 +386,18 @@ std::vector<Game> FoxClient::mergeHistory(const std::vector<Game>& search,
         auto it = byTitle.find(key);
         if (it != byTitle.end()) {
             int itemDay = dateOrdinal(item.starttime);
+            int bestHits = -1;
+            int bestDiff = 9999;
             for (size_t idx : it->second) {
                 int metaDay = dateOrdinal(metaItems[idx].starttime);
-                if (std::abs(itemDay - metaDay) > 2) continue;
-                found = &metaItems[idx];
-                break;
+                int diff = std::abs(itemDay - metaDay);
+                if (diff > 2) continue;
+                int hits = playerHits(item.title, metaItems[idx]);
+                if (hits > bestHits || (hits == bestHits && diff < bestDiff)) {
+                    bestHits = hits;
+                    bestDiff = diff;
+                    found = &metaItems[idx];
+                }
             }
         }
         if (!found) {
@@ -356,6 +418,10 @@ std::vector<Game> FoxClient::mergeHistory(const std::vector<Game>& search,
             g.title = item.title.empty() ? found->title : item.title;
             g.starttime = item.starttime.empty() ? found->starttime : item.starttime;
             g.endtime = item.starttime.empty() ? found->endtime : item.starttime;
+            if (!item.blackName.empty() && !item.whiteName.empty()) {
+                g.blackName = item.blackName;
+                g.whiteName = item.whiteName;
+            }
             merged.push_back(std::move(g));
         } else {
             merged.push_back(item);
